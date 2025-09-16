@@ -9,9 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Streamlit config
 # ----------------------------
 st.set_page_config(page_title="PDF ID Extractor", layout="wide")
-st.title("📂 PDF ID Extractor (Fast Version)")
-
-st.set_option('server.maxUploadSize', 200)
+st.title("📂 PDF ID Extractor (Fast & Optimized Version)")
 
 uploaded_files = st.file_uploader(
     "Upload PDFs or ZIP files (multiple allowed)",
@@ -25,11 +23,10 @@ uploaded_files = st.file_uploader(
 def process_pdf(file_name, file_obj):
     try:
         reader = PdfReader(file_obj)
-        # Efficient text extraction
         text = "".join(page.extract_text() or "" for page in reader.pages)
         match = re.search(r"\b\d{18,22}\b", text)
         extracted_id = match.group(0) if match else None
-        return {"File": file_name, "Extracted_ID": extracted_id}
+        return {"File": file_name, "Extracted_ID": extracted_id, "Error": None}
     except Exception as e:
         return {"File": file_name, "Extracted_ID": None, "Error": str(e)}
 
@@ -45,7 +42,7 @@ def process_zip(file_obj):
                     with z.open(file_info) as pdf_file:
                         results.append(process_pdf(file_info.filename, pdf_file))
     except Exception as e:
-        st.warning(f"⚠️ Could not process ZIP: {e}")
+        results.append({"File": "ZIP_Error", "Extracted_ID": None, "Error": str(e)})
     return results
 
 # ----------------------------
@@ -53,22 +50,29 @@ def process_zip(file_obj):
 # ----------------------------
 if uploaded_files:
     results = []
-    with st.spinner("⏳ Processing files..."):
-        futures = []
-        with ThreadPoolExecutor(max_workers=6) as executor:  # Adjust max_workers as per CPU
-            for file in uploaded_files:
-                if file.name.lower().endswith(".pdf"):
-                    futures.append(executor.submit(process_pdf, file.name, file))
-                elif file.name.lower().endswith(".zip"):
-                    futures.append(executor.submit(process_zip, file))
 
-            # Collect results
-            for future in as_completed(futures):
-                res = future.result()
-                if isinstance(res, list):
-                    results.extend(res)
-                else:
-                    results.append(res)
+    progress_text = st.empty()
+    progress_bar = st.progress(0)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = []
+        total_files = len(uploaded_files)
+        for file in uploaded_files:
+            if file.name.lower().endswith(".pdf"):
+                futures.append(executor.submit(process_pdf, file.name, file))
+            elif file.name.lower().endswith(".zip"):
+                futures.append(executor.submit(process_zip, file))
+
+        for i, future in enumerate(as_completed(futures)):
+            res = future.result()
+            if isinstance(res, list):
+                results.extend(res)
+            else:
+                results.append(res)
+
+            # Update progress bar
+            progress_bar.progress((i + 1) / total_files)
+            progress_text.text(f"Processing file {i+1}/{total_files}...")
 
     # ----------------------------
     # Prepare DataFrame
@@ -81,6 +85,12 @@ if uploaded_files:
 
         st.success(f"✅ Processed {len(df)} files successfully!")
         st.dataframe(df, use_container_width=True)
+
+        # Show errors if any
+        errors = df[df["Error"].notna()]
+        if not errors.empty:
+            st.error("⚠️ Some files could not be processed:")
+            st.table(errors[["File", "Error"]])
 
         # Save Excel
         output_file = "extracted_ids.xlsx"
