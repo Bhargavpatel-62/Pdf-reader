@@ -6,77 +6,88 @@ import re
 import pandas as pd
 from PyPDF2 import PdfReader
 
-st.title("📂 PDF ID Extractor (Folder or ZIP Upload)")
+# ----------------------------
+# Streamlit config
+# ----------------------------
+st.set_page_config(page_title="PDF ID Extractor", layout="wide")
+st.title("📂 PDF ID Extractor (PDFs & ZIP Files)")
 
-# Choice: Folder path (local) or ZIP upload
-choice = st.radio("Select input type:", ("Upload ZIP file", "Local folder"))
+# Increase max upload size to 200 MB
+st.set_option('server.maxUploadSize', 200)
 
+# File uploader - multiple PDFs or ZIPs
+uploaded_files = st.file_uploader(
+    "Upload PDFs or ZIP files (multiple allowed)",
+    type=["pdf", "zip"],
+    accept_multiple_files=True
+)
+
+# Data storage
 data = []
 
-if choice == "Upload ZIP file":
-    uploaded_zip = st.file_uploader("Upload a ZIP file containing PDFs", type=["zip"])
-    
-    if uploaded_zip:
-        with zipfile.ZipFile(uploaded_zip) as z:
-            for file_info in z.infolist():
-                if file_info.filename.lower().endswith(".pdf"):
-                    with z.open(file_info) as pdf_file:
-                        reader = PdfReader(pdf_file)
-                        text = ""
-                        for page in reader.pages:
-                            if page.extract_text():
-                                text += page.extract_text() + "\n"
-
-                        match = re.search(r"\b\d{18,22}\b", text)
-                        extracted_id = match.group(0) if match else None
-
-                        data.append({
-                            "File": file_info.filename,
-                            "Extracted_ID": extracted_id
-                        })
-
-elif choice == "Local folder":
-    folder_path = st.text_input("Enter local folder path containing PDFs:")
-    
-    if folder_path and os.path.exists(folder_path):
-        for root, dirs, files in os.walk(folder_path):
-            for file_name in files:
-                if file_name.lower().endswith(".pdf"):
-                    pdf_path = os.path.join(root, file_name)
-                    reader = PdfReader(pdf_path)
-                    text = ""
-                    for page in reader.pages:
-                        if page.extract_text():
-                            text += page.extract_text() + "\n"
+# Process uploaded files
+if uploaded_files:
+    with st.spinner("⏳ Processing files..."):
+        for file in uploaded_files:
+            filename = file.name
+            try:
+                # ----------------------------
+                # Process single PDF
+                # ----------------------------
+                if filename.lower().endswith(".pdf"):
+                    reader = PdfReader(file)
+                    text = "".join([page.extract_text() or "" for page in reader.pages])
 
                     match = re.search(r"\b\d{18,22}\b", text)
                     extracted_id = match.group(0) if match else None
 
-                    # Relative path for clarity
-                    relative_path = os.path.relpath(pdf_path, folder_path)
                     data.append({
-                        "File": relative_path,
+                        "File": filename,
                         "Extracted_ID": extracted_id
                     })
 
-# If data collected, show results
-if data:
-    df = pd.DataFrame(data)
-    df["Status"] = df["Extracted_ID"].duplicated(keep=False).map(
-        {True: "Duplicate", False: "Unique"}
-    )
+                # ----------------------------
+                # Process ZIP file
+                # ----------------------------
+                elif filename.lower().endswith(".zip"):
+                    with zipfile.ZipFile(file) as z:
+                        for file_info in z.infolist():
+                            if file_info.filename.lower().endswith(".pdf"):
+                                with z.open(file_info) as pdf_file:
+                                    reader = PdfReader(pdf_file)
+                                    text = "".join([page.extract_text() or "" for page in reader.pages])
 
-    st.dataframe(df)
+                                    match = re.search(r"\b\d{18,22}\b", text)
+                                    extracted_id = match.group(0) if match else None
 
-    # Save results to Excel
-    output_file = "extracted_ids.xlsx"
-    df.to_excel(output_file, index=False)
+                                    data.append({
+                                        "File": file_info.filename,
+                                        "Extracted_ID": extracted_id
+                                    })
+            except Exception as e:
+                st.warning(f"⚠️ Could not process {filename}: {e}")
 
-    # Download button
-    with open(output_file, "rb") as f:
-        st.download_button(
-            label="⬇️ Download Excel",
-            data=f,
-            file_name="extracted_ids.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    # ----------------------------
+    # Display results
+    # ----------------------------
+    if data:
+        df = pd.DataFrame(data)
+        df["Status"] = df["Extracted_ID"].duplicated(keep=False).map(
+            {True: "Duplicate", False: "Unique"}
         )
+
+        st.success(f"✅ Processed {len(data)} files successfully!")
+        st.dataframe(df, use_container_width=True)
+
+        # Save to Excel
+        output_file = "extracted_ids.xlsx"
+        df.to_excel(output_file, index=False)
+
+        # Download button
+        with open(output_file, "rb") as f:
+            st.download_button(
+                label="⬇️ Download Excel",
+                data=f,
+                file_name=output_file,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
